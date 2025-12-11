@@ -12,3 +12,6 @@ tsconfig.lsif.json
 gifs/long
 
 src/__pycache__
+
+build/
+assets/scenes/*

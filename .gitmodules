@@ -1,0 +1,9 @@
+[submodule "libs/normalizing_flows"]
+	path = libs/normalizing_flows
+	url = https://github.com/VincentStimper/normalizing-flows
+[submodule "libs/multires-hash-encoding-pytorch"]
+	path = libs/multires-hash-encoding-pytorch
+	url = https://github.com/jenkspt/multires-hash-encoding-pytorch
+[submodule "libs/tiny-cuda-nn"]
+	path = libs/tiny-cuda-nn
+	url = https://github.com/NVlabs/tiny-cuda-nn

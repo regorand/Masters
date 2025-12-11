@@ -1,0 +1,31 @@
+name: master-pytorch
+channels:
+    - pytorch
+    - nvidia
+    - conda-forge
+dependencies:
+    - numpy
+    - python
+    #  conda-forge::pytorch
+    # - torchaudio
+    # - torchvision
+    # - pytorch-cuda
+    - ipykernel
+    - ipywidgets
+    - pip
+    - scipy
+    - pip:
+        - --extra-index-url https://download.pytorch.org/whl/cu128
+        - torch
+        - torchvision
+        - torchaudio
+        # - git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
+        - matplotlib
+        - tqdm
+        - opencv-python
+        - pandas
+        - dictwrapper>=1.3
+        - ruamel.yaml==0.16.12
+        - mitsuba
+        - imageio
+        - commentjson

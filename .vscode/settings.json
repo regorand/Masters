@@ -1,0 +1,5 @@
+{
+    "jupyter.debugJustMyCode": false,
+    "python.analysis.autoImportCompletions": true,
+    "cmake.sourceDirectory": "D:/Studium/Masters/Masters/libs/tiny-cuda-nn/dependencies/fmt/test"
+}
