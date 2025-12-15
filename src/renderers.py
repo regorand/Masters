@@ -216,7 +216,6 @@ class Renderer():
     def sample_sensor_at_point(self, point):
         sample2 = mi.Point2d(point)
 
-        mi.Sensor.sample_ray
         ray = self.scene.sensors()[0].sample_ray(time = 0, sample1=0, sample2=sample2, sample3=mi.Point2f(0))[0]
         si = self.scene.ray_intersect(ray)
 

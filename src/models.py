@@ -303,7 +303,7 @@ class NormalizingFlowModel(AbstractModel):
         if normal.shape[0] != num_samples:
             normals_exp = normal.expand(num_samples, -1)
 
-        bsdf_ctx = mi.BSDFContext(mode = mi.TransportMode.Importance, type_mask=mi.BSDFFlags.Smooth)
+        bsdf_ctx = mi.BSDFContext(mode = mi.TransportMode.Importance)
 
         sample1 = rng.random(mi.Float, (num_samples, ))
         sample2 = rng.random(mi.Point2f, (2, num_samples))
@@ -311,7 +311,8 @@ class NormalizingFlowModel(AbstractModel):
         bsdf_sample, spec = si.bsdf().sample(bsdf_ctx, si, sample1, sample2)
 
         if dr.any(dr.all(spec == mi.Spectrum(0))):
-            print(f"bsdf sampling failed")
+            pass
+            #print(f"bsdf sampling failed")
 
         prior_samples = utils.cartesian_to_system(si.to_world(bsdf_sample.wo).torch().detach().transpose(0, 1), self.coordinate_system)
 

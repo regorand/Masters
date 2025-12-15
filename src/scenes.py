@@ -489,8 +489,8 @@ def cbox():
             },
             'film': {
                 'type': 'hdrfilm',
-                'width' : 256,
-                'height': 256,
+                'width' : 512,
+                'height': 512,
                 'rfilter': {
                     'type': 'gaussian',
                 },
@@ -758,6 +758,8 @@ def spaceship():
 def living_room_2():
     return mi.load_file("../assets/scenes/living-room-2/scene.xml")
 
+def veach_ajar():
+    return mi.load_file("../assets/scenes/veach-ajar/scene.xml")
 
 def get_scene_by_name(name: str):
     if name == 'env_scene_sphere':
@@ -784,3 +786,5 @@ def get_scene_by_name(name: str):
         return spaceship()
     elif name == 'living_room_2':
         return living_room_2()
+    elif name == 'veach_ajar':
+        return veach_ajar()
