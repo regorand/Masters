@@ -5,13 +5,13 @@ import utils as utils
 from coordinate_system import CoordinateSystem
 
 class Prior(torch.nn.Module):
-    def sample(self, num_samples, normals = None):
+    def sample(self, num_samples, normals = None, device = 'cuda'):
         raise NotImplementedError("Not Implemented")
     
-    def prob(self, x, normals = None):
+    def prob(self, x, normals = None, device = 'cuda'):
         raise NotImplementedError("Not Implemented")
 
-    def log_prob(self, x, normals = None):
+    def log_prob(self, x, normals = None, device = 'cuda'):
         raise NotImplementedError("Not Implemented")
     
     def requires_normal(self):
@@ -27,27 +27,51 @@ class UniformPrior(Prior):
         self.requires_nrml = False
         self.coordinate_system = coordinate_system
 
-    def sample(self, num_samples, normals = None):
+    def sample(self, num_samples, normals = None, device = 'cuda'):
         return torch.rand((num_samples, self.dim), device =self.domain.device) * (self.domain[:, 1] - self.domain[:, 0]) + self.domain[:, 0]
     
-    def sample_with_pdf(self, num_samples, normals = None, solid_angle = False):
+    def sample_with_pdf(self, num_samples, normals = None, device = 'cuda'):
         samples = self.sample(num_samples=num_samples, normals=normals)
         pdf = torch.full((num_samples,), self.pdf, device = self.domain.device)
-
-        if not solid_angle:
-            pdf * samples[:, 1].sin()
 
         return samples, pdf
 
 
-    def prob(self, x, normals = None, solid_angle = False):
-        if solid_angle:
-            torch.full((x.shape[0], ), self.pdf, device = self.domain.device)
+    def prob(self, x, normals = None, device = 'cuda'):
+        return torch.full((x.shape[0], ), self.pdf, device = self.domain.device)
 
-        return torch.full((x.shape[0], ), self.pdf, device = self.domain.device) * x[:, 1].sin()
+    def log_prob(self, x, normals = None, device = 'cuda'):
+        return (self.prob(x, normals) + self.eps).log()
 
-    def log_prob(self, x, normals = None, solid_angle = False):
-        return (self.prob(x, normals, solid_angle=solid_angle) + self.eps).log()
+    def requires_normal(self):
+        return self.requires_nrml
+
+class UniformSphere(Prior):
+    def __init__(self, coordinate_system: CoordinateSystem = CoordinateSystem.Spherical):
+        super().__init__()
+        self.dim = 3
+        self.pdf = 0.07957747 # = 1 / (4 * pi) -> i.e. 1/A where A is surface area of unit sphere
+        self.eps = 1e-8
+        self.requires_nrml = False
+        self.coordinate_system = coordinate_system
+
+    def sample(self, num_samples, normals = None, device = 'cuda'):
+        unnorm = torch.randn((num_samples, self.dim), device=device)
+        return utils.cartesian_to_spherical(torch.nn.functional.normalize(unnorm, dim = 1))
+    
+    def sample_with_pdf(self, num_samples, normals = None, device = 'cuda'):
+        samples = self.sample(num_samples=num_samples, normals=normals)
+        pdf = torch.full((num_samples,), self.pdf, device = device)
+
+        pdf = pdf * samples[:, 1].sin()
+
+        return samples, pdf
+
+    def prob(self, x, normals = None, device = 'cuda'):
+        return torch.full((x.shape[0], ), self.pdf, device = device) * x[:, 1].sin()
+
+    def log_prob(self, x, normals = None, device = 'cuda'):
+        return (self.prob(x, normals) + self.eps).log()
 
     def requires_normal(self):
         return self.requires_nrml
@@ -72,51 +96,34 @@ class CosineWeighted(Prior):
 
         cond = (torch.abs(N[:, 0]) > torch.abs(N[:, 2]))
 
-        # Pick helper vectors per batch entry
-        # If |Nx| > |Nz| → use (−Ny, Nx, 0)
-        # Else → use (0, −Nz, Ny)
         h = torch.where(
             cond.unsqueeze(-1),
             torch.stack([-N[:, 1], N[:, 0], torch.zeros_like(N[:, 0])], dim=-1),
             torch.stack([torch.zeros_like(N[:, 0]), -N[:, 2], N[:, 1]], dim=-1)
         )
 
-        # Tangent T = normalize(h)
         T = torch.nn.functional.normalize(h, dim=-1)
-        # Bitangent B = N × T
         B = torch.cross(N, T, dim=-1)
 
-        # Stack columns [T, B, N] into rotation matrix
-        # Shape: [B, 3, 3]
         onb = torch.stack((T, N, B), dim=-1)
         return onb
 
 
     def apply_ONB(self, samples, onb):
-        """
-        Rotate local (hemisphere) directions to world using ONB matrices.
-        Args:
-            local_dirs: [B, 3] tensor of local directions (hemisphere about +Z)
-            onb: [B, 3, 3] ONB matrices from build_onb
-        Returns:
-            world_dirs: [B, 3] tensor of rotated directions
-        """
-        # matrix multiply: each batch entry gets its own ONB @ dir
-        # (B, 3, 3) @ (B, 3, 1) → (B, 3, 1)
         world_dirs = (onb @ samples.unsqueeze(-1)).squeeze(-1)
-        # normalize (optional, to clean up floating-point drift)
+
         world_dirs = torch.nn.functional.normalize(world_dirs, dim=-1)
         return world_dirs
     
 
-    def sample(self, num_samples, normals):
+    def sample(self, num_samples, normals, device = 'cuda'):
         samples = self.sample_local(num_samples, normals.device)
         onb = self.build_ONB(normals)
         rotated_samples = self.apply_ONB(samples, onb)
 
         return utils.cartesian_to_system(rotated_samples, self.coordinate_system)
     
-    def sample_with_pdf(self, num_samples, normals, solid_angle = False):
+    def sample_with_pdf(self, num_samples, normals, device = 'cuda'):
         samples = self.sample_local(num_samples, normals.device)
         onb = self.build_ONB(normals)
         rotated_samples = self.apply_ONB(samples, onb)
@@ -127,23 +134,21 @@ class CosineWeighted(Prior):
 
         pdf = torch.clamp(dot, min = 0.0) / torch.pi
         
-        if not solid_angle:
-            pdf = pdf * angles[:, 1].sin()
+
+        pdf = pdf * angles[:, 1].sin()
 
         return angles, pdf
     
-    def prob(self, x, normals, solid_angle = False):
+    def prob(self, x, normals, device = 'cuda'):
         # vecs = utils.to_vec3_torch(x[:, 0], x[:, 1])
         vecs = utils.system_to_cartesian(x, self.coordinate_system)
         dot = (vecs * normals).sum(dim=-1)
         pdf = torch.clamp(dot, min = 0.0) / torch.pi
-        if solid_angle:
-            return pdf
         
         return pdf * torch.sin(x[:, 1])
 
-    def log_prob(self, x, normals, solid_angle = False):
-        return (self.prob(x, normals, solid_angle=solid_angle) + self.eps).log()
+    def log_prob(self, x, normals):
+        return (self.prob(x, normals) + self.eps).log()
 
     def requires_normal(self):
         return self.requires_nrml

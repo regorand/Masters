@@ -28,3 +28,4 @@ class Context:
     only_direct: bool = False
     only_indirect: bool = False
     bsdf_prior: bool = False
+    only_optimize_encoding: bool = False

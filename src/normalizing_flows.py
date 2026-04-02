@@ -1,3 +1,4 @@
+from xml.etree.ElementInclude import include
 import torch
 import tinycudann as tcnn
 
@@ -11,7 +12,7 @@ This implementation is in part based on https://github.com/VincentStimper/normal
 """
 
 # @torch.jit.script
-def build_spline_params(input, B: float, beta: float = 1.0):
+def build_spline_params(input, B: float, beta: float = 1.0, include_phase: bool = False):
     # if (input.shape[-1] + 1) % 3 != 0: ### Old version
     if (input.shape[-1] - 1) % 3 != 0:
         # raise RuntimeError("Spline needs input of size 3K - 1 in last dim")
@@ -22,7 +23,7 @@ def build_spline_params(input, B: float, beta: float = 1.0):
 
     theta_w = input[..., :K]
     theta_h = input[..., K:2 * K]
-    theta_d = input[..., 2*K:]
+    theta_d = input[..., 2 * K:] if not include_phase else input[..., 2 * K:3 * K]
 
     x_left = -B
     y_left = -B
@@ -56,7 +57,10 @@ def build_spline_params(input, B: float, beta: float = 1.0):
 
     knot_derivs = torch.nn.functional.softplus(theta_d, beta=beta)
 
-    ###
+    if include_phase:
+        knot_derivs = torch.cat([knot_derivs, knot_derivs[..., :1]], dim=-1)
+
+    phase = torch.full(input.shape[:-2], 0.0) if not include_phase else input[..., -1:]
 
     zeros_shape = list(widths.shape[:-1]) + [1]
 
@@ -71,10 +75,14 @@ def build_spline_params(input, B: float, beta: float = 1.0):
             torch.cumsum(heights, dim=-1)
         ], dim=-1) + y_left
     
-    return vertices_x, vertices_y, knot_derivs
+    return vertices_x, vertices_y, knot_derivs, phase
+
+def mod_to_domain(x, B):
+    return torch.fmod(torch.fmod(x + B, B * 2) + B * 2, B * 2) - B
+    
 
 # @torch.jit.script
-def eval_quadratic_spline(vertices_x, vertices_y, knot_derivs, x):
+def eval_quadratic_spline(vertices_x, vertices_y, knot_derivs, x, B, phase):
     idx = torch.searchsorted(vertices_x, x) - 1
     idx = torch.clamp(idx, 0, vertices_x.shape[-1] - 2)
 
@@ -103,10 +111,10 @@ def eval_quadratic_spline(vertices_x, vertices_y, knot_derivs, x):
     log_det = torch.where(mask, torch.log(deriv_num) - torch.log(denominator) * 2, 0)
     # log_det = torch.log(deriv_num) - torch.log(denominator) * 2
 
-    return y, log_det.squeeze(-1)
+    return mod_to_domain(y + phase, B), log_det.squeeze(-1)
 
 # @torch.jit.script
-def invert_quadratic_spline(vertices_x, vertices_y, knot_derivs, y):
+def invert_quadratic_spline(vertices_x, vertices_y, knot_derivs, y, B, phase):
     idx = torch.searchsorted(vertices_y, y) - 1
     idx = torch.clamp(idx, 0, vertices_y.shape[-1] - 2)
 
@@ -143,12 +151,11 @@ def invert_quadratic_spline(vertices_x, vertices_y, knot_derivs, y):
     log_det = torch.where(mask, torch.log(deriv_num) - torch.log(denominator) * 2, 0)
     # log_det = torch.log(deriv_num) - torch.log(denominator) * 2
 
-    return x, -log_det.squeeze(-1)
-
+    return mod_to_domain(x - phase, B), -log_det.squeeze(-1)
 
 
 class NeuralSplineFlow(torch.nn.Module):
-    def __init__(self, K, context_size, enc_config, net_config, latent_to_hash_grid, beta = 1.0):
+    def __init__(self, K, context_size, enc_config, net_config, latent_to_hash_grid, beta = 1.0, with_phase: bool = False):
         super().__init__()
         self.B = 1.0 # hardcode to range [-1, 1], scaling can be done outside componentwise. Otherwise it's more complicated for non-square domains
         self.K = K
@@ -156,17 +163,16 @@ class NeuralSplineFlow(torch.nn.Module):
 
         self.context_size = context_size
 
-        # self.encoding = tcnn.Encoding(context_size + 1, enc_config)
-        # self.network = tcnn.Network(self.encoding.n_output_dims, (3 * K  - 1), net_config)
+        ### Seperated
+        self.encoding = tcnn.Encoding(context_size + 1, enc_config)
+        self.network = tcnn.Network(self.encoding.n_output_dims, (3 * K + 1), net_config)
 
-        ### Old version
-        # self.network = tcnn.NetworkWithInputEncoding(context_size + 1, (3 * K  - 1), enc_config, net_config)
-
-        ### New version
-        self.network = tcnn.NetworkWithInputEncoding(context_size + 1, (3 * K + 1), enc_config, net_config)
+        ### Combined
+        # self.network = tcnn.NetworkWithInputEncoding(context_size + 1, (3 * K + 1), enc_config, net_config)
 
         self.network.jit_fusion = tcnn.supports_jit_fusion()
         self.latent_to_hash_grid = latent_to_hash_grid
+        self.with_phase = with_phase
 
 
     def to_encoding_domain(self, x):
@@ -192,12 +198,15 @@ class NeuralSplineFlow(torch.nn.Module):
                     if context.shape[0] > 0
                     else (self.to_encoding_domain(x0)))
 
-        # params = self.network(self.encoding(net_inp)).squeeze(-1)
-        params = self.network(net_inp).squeeze(-1)
+        ### Seperated
+        params = self.network(self.encoding(net_inp)).squeeze(-1)
+        
+        ### Combined
+        # params = self.network(net_inp).squeeze(-1)
 
-        vertices_x, vertices_y, knot_derivs = build_spline_params(params, self.B, self.beta)
+        vertices_x, vertices_y, knot_derivs, phase = build_spline_params(params, self.B, self.beta, include_phase=self.with_phase)
 
-        y1, abs_log_det = eval_quadratic_spline(vertices_x, vertices_y, knot_derivs, x1)
+        y1, abs_log_det = eval_quadratic_spline(vertices_x, vertices_y, knot_derivs, x1, self.B, phase)
 
         y = torch.cat((
             x0,
@@ -222,12 +231,15 @@ class NeuralSplineFlow(torch.nn.Module):
                         if context.shape[0] > 0
                         else (self.to_encoding_domain(y0)))
 
-        # params = self.network(self.encoding(net_inp)).squeeze(-1)
-        params = self.network(net_inp).squeeze(-1)
+        ### Seperated
+        params = self.network(self.encoding(net_inp)).squeeze(-1)
+        
+        ### Combined
+        # params = self.network(net_inp).squeeze(-1)
 
-        vertices_x, vertices_y, knot_derivs = build_spline_params(params, self.B, self.beta)
+        vertices_x, vertices_y, knot_derivs, phase = build_spline_params(params, self.B, self.beta, self.with_phase)
 
-        x1, abs_log_det = invert_quadratic_spline(vertices_x, vertices_y, knot_derivs, y1)
+        x1, abs_log_det = invert_quadratic_spline(vertices_x, vertices_y, knot_derivs, y1, self.B, phase)
 
         x = torch.cat((
             y0,

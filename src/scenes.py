@@ -745,7 +745,6 @@ def cbox_inverted_light():
     })
 
 
-
 def veach_mis_scene():
     return mi.load_file("../assets/scenes/veach_mis/scene_v3.xml")
 
@@ -760,6 +759,9 @@ def living_room_2():
 
 def veach_ajar():
     return mi.load_file("../assets/scenes/veach-ajar/scene.xml")
+
+def ganesha():
+    return mi.load_file("../assets/scenes/ganesha/scene.xml")
 
 def get_scene_by_name(name: str):
     if name == 'env_scene_sphere':
@@ -788,3 +790,5 @@ def get_scene_by_name(name: str):
         return living_room_2()
     elif name == 'veach_ajar':
         return veach_ajar()
+    elif name == 'ganesha':
+        return ganesha()
